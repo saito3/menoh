@@ -16,21 +16,6 @@
 #include <menoh/utility.hpp>
 
 namespace menoh_impl {
-    inline std::vector<int> broadcast_shape(std::vector<int> const& adims,
-                                            std::vector<int> const& bdims) {
-        if(adims.size() < bdims.size()) {
-            return broadcast_shape(bdims, adims);
-        }
-        auto num_of_left_ones = adims.size() - bdims.size();
-        std::vector<int> cdims(num_of_left_ones, 1);
-        cdims.insert(cdims.end(), bdims.begin(), bdims.end());
-        std::vector<int> broadcast_dims;
-        assert(cdims.size() == adims.size());
-        std::transform(adims.begin(), adims.end(), cdims.begin(),
-                       std::back_inserter(broadcast_dims),
-                       [](auto a, auto b){ return std::max(a, b); });
-        return broadcast_dims;
-    }
     inline auto complete_attribute_and_infer_shape(
             model_data& model_data,
             std::unordered_map<std::string, array_profile> const&
@@ -72,6 +57,16 @@ namespace menoh_impl {
                     name, array_profile(dtype, dims));
             };
 
+        //Remove unsupported nodes from the list
+        auto itr = model_data.node_list.begin();
+        while(itr != model_data.node_list.end()) {
+          if(itr->op_type.compare("Split") == 0) {
+            itr = model_data.node_list.erase(itr);
+          } else {
+            itr++;
+          }
+        }
+
         auto graph = make_graph(model_data.node_list); // FIXME reorder nodes
         model_data.node_list = graph.node_list();
         for(auto& node : model_data.node_list) {
@@ -81,7 +76,7 @@ namespace menoh_impl {
             auto output = [&node](auto i){
                 return node.output_name_list.at(i);
             };
-            
+
 if(node.op_type == "Abs") {
     
     
@@ -442,16 +437,14 @@ node.attribute_table.emplace(
         auto output_shape = get<ints>(found->second);
         /* [dim0_begin, dim1_begin, ... , dim0_end, dim1_end, ..., ...] */
         ints pads(kernel_ndims*2, 0);
-        auto output_padding =
-            get<ints>(node.attribute_table.at("output_padding"));
         auto strides = get<ints>(node.attribute_table.at("strides"));
-        auto input_profile = input_profile_table.at(input(0));
+        auto input_profile = variable_profile_table.at(input(0));
         ints input_size(input_profile.dims().begin()+2,
                         input_profile.dims().end());
 
         for(unsigned int i = 0; i < kernel_ndims; ++i) {
             auto total_padding = strides[i] * (input_size[i] - 1)
-                + output_padding[i] + kernel_shape[i] - output_shape[i];
+                + kernel_shape[i] - output_shape[i];
             pads[i] = total_padding - (total_padding/2);
             pads[i+kernel_ndims] = (total_padding/2);
         }
@@ -461,21 +454,9 @@ node.attribute_table.emplace(
 }
 
     {
-        
-auto dilations = get<ints>(node.attribute_table.at("dilations"));
-static_cast<void>(dilations); // maybe unused
-
-
-auto group = get<int>(node.attribute_table.at("group"));
-static_cast<void>(group); // maybe unused
-
 
 auto kernel_shape = get<ints>(node.attribute_table.at("kernel_shape"));
 static_cast<void>(kernel_shape); // maybe unused
-
-
-auto output_padding = get<ints>(node.attribute_table.at("output_padding"));
-static_cast<void>(output_padding); // maybe unused
 
 
 auto strides = get<ints>(node.attribute_table.at("strides"));
@@ -627,40 +608,6 @@ if(a_dims.at(1) != b_dims.at(0)) {
 
 auto output_dims = ints({a_dims.at(0), b_dims.at(1)});
 add_variable_to_table(output(0), dtype_of(input(0)), output_dims);
-
-    }
-}
-else
-
-
-if(node.op_type == "GlobalAveragePool") {
-    
-    
-    
-    {
-        
-        
-auto input_dims = dims_of(input(0));
-auto output_dims = ints({input_dims[0], input_dims[1], 1, 1});
-add_variable_to_table(output(0), dtype_of(input(0)),
-    output_dims);
-
-    }
-}
-else
-
-
-if(node.op_type == "GlobalMaxPool") {
-    
-    
-    
-    {
-        
-        
-auto input_dims = dims_of(input(0));
-auto output_dims = ints({input_dims[0], input_dims[1], 1, 1});
-add_variable_to_table(output(0), dtype_of(input(0)),
-    output_dims);
 
     }
 }
@@ -843,77 +790,7 @@ add_variable_to_table(output(0), dtype_of(input(0)),
 else
 
 
-if(node.op_type == "Mul") {
-    
-    
-    
-    {
-        
-        
-add_variable_to_table(output(0), dtype_of(input(0)),
-    broadcast_shape(
-        dims_of(input(0)), dims_of(input(1))));
-
-    }
-}
-else
-
-
 if(node.op_type == "Relu") {
-    
-    
-    
-    {
-        
-        
-assert(node.input_name_list.size() > 0);
-assert(node.output_name_list.size() > 0);
-add_variable_to_table(output(0), dtype_of(input(0)), dims_of(input(0)));
-
-    }
-}
-else
-
-
-if(node.op_type == "Reshape") {
-    
-    
-    
-    {
-        
-        
-auto found = std::find_if(model_data.parameter_name_and_array_list.begin(),
-                          model_data.parameter_name_and_array_list.end(),
-                          [shape_name=node.input_name_list.at(1)](
-                            auto const& p){ return p.first == shape_name; });
-assert(found != model_data.parameter_name_and_array_list.end());
-auto shape = found->second;
-std::vector<int> new_dims(menoh_impl::begin<dtype_t::int64>(shape),
-                          menoh_impl::end<dtype_t::int64>(shape));
-for(unsigned int i = 0; i < new_dims.size(); ++i) {
-    if(new_dims.at(i) == 0) {
-        assert(i < ndims_of(input(0)));
-        new_dims.at(i) = dims_of(input(0)).at(i);
-    }
-    auto found =
-      std::find(new_dims.begin(), new_dims.end(), -1);
-    if(found != new_dims.end()) {
-        auto other_size =
-          -std::accumulate(new_dims.begin(), new_dims.end(),
-                           1, std::multiplies<>());
-        auto total_size = calc_total_size(dims_of(input(0)));
-        assert(total_size % other_size == 0);
-        *found = total_size / other_size;
-    }
-}
-add_variable_to_table(output(0), dtype_of(input(0)), new_dims);
-
-    }
-}
-else
-
-
-if(node.op_type == "Sigmoid") {
     
     
     
